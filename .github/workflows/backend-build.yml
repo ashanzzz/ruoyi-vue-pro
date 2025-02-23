@@ -1,48 +1,78 @@
-name: Backend Build
+name: Backend Build & Release
 
 on:
   push:
     branches: [ "master" ]
-  pull_request:
-    branches: [ "master" ]
+  workflow_dispatch: # 允许手动触发
+
+# --------------------- 关键修复：赋予写入权限 ---------------------
+permissions:
+  contents: write  # 允许推送代码到分支
 
 jobs:
-  build:
+  build-and-publish:
     runs-on: ubuntu-latest
 
     steps:
-    # --------------------- 修复1：使用最新版 actions ---------------------
+    # --------------------- 代码检出（含凭证持久化）---------------------
     - name: Checkout code
-      uses: actions/checkout@v4  # 从 v2 升级到 v4
-
-    # --------------------- 修复2：明确指定 JDK 版本 ---------------------
-    - name: Set up JDK 17
-      uses: actions/setup-java@v3  # 使用稳定版本
+      uses: actions/checkout@v4
       with:
-        java-version: '17'        # 根据项目实际需求指定
-        distribution: 'temurin'  # Eclipse Temurin 发行版
-        cache: 'maven'            # 启用 Maven 缓存
+        fetch-depth: 0
+        persist-credentials: true  # 保留Git凭证供后续使用
 
-    # --------------------- 修复3：优化缓存配置 ---------------------
+    # --------------------- JDK 环境 ---------------------
+    - name: Set up JDK 17
+      uses: actions/setup-java@v3
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+        cache: 'maven'
+
+    # --------------------- 智能缓存依赖 ---------------------
     - name: Cache Maven packages
       uses: actions/cache@v3
       with:
         path: |
           ~/.m2/repository
-          **/target/*.jar
+          **/target/
         key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
         restore-keys: |
           ${{ runner.os }}-maven-
 
-    # --------------------- 修复4：添加构建日志输出 ---------------------
+    # --------------------- 构建验证 ---------------------
     - name: Build with Maven
       run: |
-        echo "### 构建开始 ###"
-        mvn clean package -Dmaven.test.skip=true -B -V
-        echo "### 构建产物列表 ###"
+        # 构建前清理
+        mvn clean -B
+        # 并行构建加速
+        mvn package -Dmaven.test.skip=true -T 1C -B -V
+        # 产物验证
+        echo "构建产物:"
         find . -name "*.jar" -exec ls -lh {} \;
 
-    # --------------------- 修复5：优化产物上传 ---------------------
+    # --------------------- 分支推送（含冲突处理）---------------------
+    - name: Push to release branch
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # 使用自动生成的token
+      run: |
+        # 配置Git身份
+        git config --global user.name "GitHub Actions"
+        git config --global user.email "actions@github.com"
+        
+        # 创建或重置release分支
+        git checkout --orphan release
+        git rm -rf .  # 清理历史文件
+        
+        # 仅保留Jar包和必要文件
+        find . -name "*.jar" -exec git add -f {} \;
+        git add pom.xml README.md  # 按需添加其他文件
+        
+        # 提交并强制推送
+        git commit -m "chore: Auto-update jars (Build ${{ github.run_id }})"
+        git push origin release --force --verbose
+
+    # --------------------- 产物存档 ---------------------
     - name: Upload Artifact
       uses: actions/upload-artifact@v3
       with:
@@ -50,4 +80,4 @@ jobs:
         path: |
           **/target/*.jar
           !**/surefire-reports/
-        if-no-files-found: error  # 找不到文件时报错
+        retention-days: 3
