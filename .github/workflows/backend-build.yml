@@ -5,82 +5,80 @@ on:
     branches: [ "master" ]
   workflow_dispatch:
 
+# --------------------- 新增LFS权限 ---------------------
 permissions:
   contents: write
+  checks: write
+  lfs: true  # 必须开启LFS权限
 
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
 
     steps:
-    # --------------------- 代码检出 ---------------------
-    - name: 检出代码
+    # --------------------- LFS 前置配置 ---------------------
+    - name: 安装Git LFS
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y git-lfs
+        git lfs install --skip-repo  # 全局启用LFS
+
+    - name: 检出代码（含LFS）
       uses: actions/checkout@v4
       with:
+        lfs: true  # 必须启用LFS检出
         fetch-depth: 0
         persist-credentials: true
 
-    # --------------------- JDK环境 ---------------------
+    # --------------------- 配置LFS跟踪 ---------------------
+    - name: 标记大文件
+      run: |
+        git lfs track "**/*.jar"  # 跟踪所有Jar文件
+        git add .gitattributes    # 提交LFS配置
+
+    # --------------------- 构建阶段 ---------------------
     - name: 设置JDK 17
-      uses: actions/setup-java@v4  # 同步升级到v4
+      uses: actions/setup-java@v4
       with:
         java-version: '17'
         distribution: 'temurin'
         cache: 'maven'
 
-    # --------------------- 构建阶段 ---------------------
-    - name: 缓存依赖
-      uses: actions/cache@v4  # 升级到最新版
-      with:
-        path: |
-          ~/.m2/repository
-          **/target/
-        key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
-
-    - name: Maven编译
-      run: mvn clean package -Dmaven.test.skip=true -T 1C
-
-    # --------------------- 产物处理 (关键修复点) ---------------------
-    - name: 上传构建产物
-      uses: actions/upload-artifact@v4  # 升级到v4版本
-      with:
-        name: jar-packages
-        path: |
-          **/target/*.jar
-          !**/*-tests.jar  # 明确排除测试jar
-        retention-days: 3
-        if-no-files-found: error
-        compression-level: 9  # 新增v4优化参数
-
-    # --------------------- 部署阶段 ---------------------
-    - name: 生成版本文件
+    - name: 优化构建配置
       run: |
-        echo "构建时间: $(date '+%Y-%m-%d %H:%M:%S')" > build-info.txt
-        echo "提交ID: ${{ github.sha }}" >> build-info.txt
-        find . -name "*.jar" -printf "%f\n" >> build-info.txt
+        # 使用Maven shade插件排除测试类
+        mvn clean package -Dmaven.test.skip=true -T 1C -B \
+          -Dmaven.shade.excludeTests=true \
+          -Dmaven.javadoc.skip=true
 
-    - name: 推送到release分支
+    # --------------------- 产物分流处理 ---------------------
+    - name: 拆分部署文件
+      run: |
+        # 将主应用Jar单独分类
+        mkdir -p lfs-files
+        find . -name "yudao-server*.jar" -exec mv {} lfs-files \;
+        find . -name "*.jar" -exec mv {} . \;
+
+    # --------------------- LFS推送 ---------------------
+    - name: 推送至release分支
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         git config --global user.name "GitHub Actions"
         git config --global user.email "actions@github.com"
         
-        # 创建孤儿分支（全新历史）
-        git checkout --orphan temp-release
-        git add -f **/target/*.jar build-info.txt
-        git commit -m "chore: 发布v$(date '+%Y%m%d%H%M')"
+        # 创建专用分支
+        git checkout --orphan release
+        git reset --hard
         
-        # 分支替换策略
-        git branch -D release || true
-        git branch -m release
-        git push -f origin release
-
-    # --------------------- 结果通知 ---------------------
-    - name: 输出构建结果
-      run: |
-        echo "=== 部署成果 ==="
-        echo "Jar文件列表:"
-        cat build-info.txt | grep '.jar'
-        echo "访问地址:"
-        echo "https://github.com/ashanzzz/ruoyi-vue-pro/releases/latest"
+        # 处理LFS文件
+        git lfs install
+        git lfs track "lfs-files/**"
+        mv lfs-files/* . && rm -rf lfs-files
+        
+        # 精简提交内容
+        git add -A
+        git commit -m "chore: 发布v$(date '+%Y%m%d%H%M') (LFS)"
+        
+        # 强制推送（需仓库设置允许LFS强制推送）
+        git push origin release --force --follow-tags
