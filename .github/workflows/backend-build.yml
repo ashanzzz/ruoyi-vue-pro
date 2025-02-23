@@ -5,36 +5,29 @@ on:
     branches: [ "master" ]
   workflow_dispatch:
 
-# --------------------- 新增LFS权限 ---------------------
+# --------------------- 修正后的权限配置 ---------------------
 permissions:
-  contents: write
-  checks: write
-  lfs: true  # 必须开启LFS权限
+  contents: write  # 正确权限作用域
+  packages: write  # 如需发布到GitHub Packages
 
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
 
     steps:
-    # --------------------- LFS 前置配置 ---------------------
+    # --------------------- Git LFS 前置配置 ---------------------
     - name: 安装Git LFS
       run: |
         sudo apt-get update
         sudo apt-get install -y git-lfs
-        git lfs install --skip-repo  # 全局启用LFS
+        git lfs install --skip-repo
 
     - name: 检出代码（含LFS）
       uses: actions/checkout@v4
       with:
-        lfs: true  # 必须启用LFS检出
+        lfs: true  # 此处才是正确启用LFS的位置
         fetch-depth: 0
         persist-credentials: true
-
-    # --------------------- 配置LFS跟踪 ---------------------
-    - name: 标记大文件
-      run: |
-        git lfs track "**/*.jar"  # 跟踪所有Jar文件
-        git add .gitattributes    # 提交LFS配置
 
     # --------------------- 构建阶段 ---------------------
     - name: 设置JDK 17
