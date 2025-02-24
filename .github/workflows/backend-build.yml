@@ -1,4 +1,4 @@
-name: 🗜️ JAR分卷部署系统
+name: 🗜️ JAR分卷部署系统（修复版）
 
 on:
   push:
@@ -6,9 +6,10 @@ on:
   workflow_dispatch:
 
 env:
-  BRANCH_NAME: "split-release"  # 分卷存储分支
-  SPLIT_SIZE: "90M"            # 分卷大小
-  TAR_NAME: "jars.tar.gz"       # 压缩包名称
+  BRANCH_NAME: "split-release"
+  SPLIT_SIZE: "90M"
+  TAR_NAME: "jars.tar.gz"
+  WORK_DIR: "split_files"  # 新增工作目录
 
 jobs:
   split-and-push:
@@ -32,19 +33,23 @@ jobs:
     - name: 📦 Maven编译
       run: mvn clean package -Dmaven.test.skip=true
 
-    # --------------- 4. 分卷压缩 ---------------
+    # --------------- 4. 分卷压缩（路径修复）---------------
     - name: 🗜️ 压缩分卷
       run: |
-        # 创建压缩包
-        tar -zcvf $TAR_NAME **/target/*.jar
+        # 创建独立工作目录
+        mkdir -p $WORK_DIR
         
-        # 分割为90MB分卷
+        # 压缩到指定目录
+        tar -zcvf $WORK_DIR/$TAR_NAME **/target/*.jar
+        
+        # 在指定目录分割文件
+        cd $WORK_DIR
         split -d -b $SPLIT_SIZE $TAR_NAME "$TAR_NAME.part."
         
         # 生成校验文件
         md5sum $TAR_NAME.part.* > checksum.md5
 
-    # --------------- 5. 推送到分支 ---------------
+    # --------------- 5. 推送到分支（路径修复）---------------
     - name: 🚀 推送分卷
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -57,10 +62,11 @@ jobs:
         git checkout --orphan $BRANCH_NAME
         git reset --hard
         
-        # 添加分卷文件
-        mv $TAR_NAME.part.* checksum.md5 .
-        git add .
+        # 移动文件到根目录
+        mv $WORK_DIR/* .
+        rmdir $WORK_DIR
         
-        # 提交并强制推送
+        # 添加并提交文件
+        git add .
         git commit -m "Release: JAR分卷包 $(date '+%Y%m%d%H%M')"
         git push origin $BRANCH_NAME --force
