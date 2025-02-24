@@ -1,57 +1,56 @@
-- name: 传输文件到WebDAV
-  env:
-    DAV_USER: ${{ secrets.WEBDAV_USER }}
-    DAV_PASS: ${{ secrets.WEBDAV_PASS }}
-  run: |
-    # 敏感信息掩码处理
-    masked_user="${DAV_USER:0:2}****${DAV_USER: -2}"
-    masked_pass="${DAV_PASS:0:2}****${DAV_PASS: -2}"
-    
-    # 生成文件列表
-    file_list=$(find . -path "$SOURCE_DIR")
-    total_files=$(echo "$file_list" | wc -l)
-    
-    # 循环传输
-    i=0
-    for file in $file_list; do
-      ((i++))
-      echo "正在上传 ($i/$total_files): ${file##*/}"
-      
-      # 带诊断的传输命令
-      upload_output=$(pv -n -b -r -a "$file" | \
-        curl -u "$DAV_USER:$DAV_PASS" \
-             -T - \
-             --silent --show-error \
-             --write-out "%{http_code}" \
-             "$WEBDAV_URL/${file##*/}" \
-             2>&1) || exit_code=$?
-      
-      # 解析响应状态码
-      http_code=$(echo "$upload_output" | tail -n1)
-      response_body=$(echo "$upload_output" | sed '$d')
+name: 🚀 直传WebDAV部署系统
 
-      # 错误诊断
-      if [ $? -ne 0 ] || [ $http_code -ge 400 ]; then
-        echo "❌ 上传失败！诊断信息："
-        echo "--------------------------"
-        echo "文件: ${file##*/}"
-        echo "用户: $masked_user"
-        echo "密码: $masked_pass"
-        echo "HTTP状态码: $http_code"
-        echo "响应内容: $response_body"
+on:
+  push:
+    branches: [ "master" ]
+  workflow_dispatch:
+
+env:
+  WEBDAV_URL: "https://alist.335356119.xyz/dav/群晖/home/download"
+  SOURCE_DIR: "**/target/*.jar"
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: 🔍 检出代码
+      uses: actions/checkout@v4
+
+    - name: 🛠️ 设置JDK环境
+      uses: actions/setup-java@v4
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+        cache: 'maven'
+
+    - name: 📦 编译打包
+      run: mvn clean package -Dmaven.test.skip=true
+
+    - name: 🚚 文件传输
+      env:
+        DAV_USER: ${{ secrets.WEBDAV_USER }}
+        DAV_PASS: ${{ secrets.WEBDAV_PASS }}
+      run: |
+        # 带中文注释的传输脚本
+        echo "=== 开始文件传输 ==="
         
-        # 常见错误映射
-        case $http_code in
-          401) echo "错误原因: WebDAV认证失败，请检查用户名密码" ;;
-          403) echo "错误原因: 权限不足，确认路径/群晖/home/download存在且有写入权限" ;;
-          404) echo "错误原因: 目标路径不存在，请检查URL中的目录结构" ;;
-          413) echo "错误原因: 文件超过服务器大小限制" ;;
-          500|502|503|504) echo "错误原因: 服务器内部错误，请检查Alist服务状态" ;;
-          *) echo "错误原因: 网络问题或未知错误，请检查网络连接" ;;
-        esac
+        # 生成文件列表
+        file_list=$(find . -path "$SOURCE_DIR")
+        total_files=$(echo "$file_list" | wc -l)
         
-        exit 1
-      fi
-      
-      echo "✅ 上传成功"
-    done
+        # 循环传输
+        counter=0
+        for file in $file_list; do
+          ((counter++))
+          filename=$(basename "$file")
+          echo "📤 正在上传 ($counter/$total_files): $filename"
+          
+          # 使用curl显示进度条
+          curl --user "$DAV_USER:$DAV_PASS" \
+               --upload-file "$file" \
+               --progress-bar \
+               "$WEBDAV_URL/$filename"
+        done
+        
+        echo "✅ 所有文件传输完成"
