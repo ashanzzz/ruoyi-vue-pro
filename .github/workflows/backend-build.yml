@@ -47,13 +47,18 @@ jobs:
         md5sum *.part.* > checksum.md5
 
     # --------------- 5. 发布到Releases ---------------
-    - name: 🚀 创建Release
-      uses: softprops/action-gh-release@v1
-      with:
-        tag_name: "v$(date +%Y%m%d%H%M)"
-        files: |
-          release/*.part.*
-          release/checksum.md5
-        draft: false
+    - name: 🚀 推送分卷到分支
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        # 创建或重置分支
+        git checkout --orphan split-files
+        git reset --hard
+        
+        # 移动分卷文件
+        mv release/* .
+        
+        # 提交并强制推送
+        git add .
+        git commit -m "Auto: 分卷文件 $(date '+%Y%m%d%H%M')"
+        git push origin split-files --force
