@@ -1,56 +1,40 @@
-name: 🚀 直传WebDAV部署系统
-
-on:
-  push:
-    branches: [ "master" ]
-  workflow_dispatch:
-
-env:
-  WEBDAV_URL: "https://alist.335356119.xyz/dav/群晖/home/download"
-  SOURCE_DIR: "**/target/*.jar"
-
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
-
-    steps:
-    - name: 🔍 检出代码
-      uses: actions/checkout@v4
-
-    - name: 🛠️ 设置JDK环境
-      uses: actions/setup-java@v4
-      with:
-        java-version: '17'
-        distribution: 'temurin'
-        cache: 'maven'
-
-    - name: 📦 编译打包
-      run: mvn clean package -Dmaven.test.skip=true
-
-    - name: 🚚 文件传输
-      env:
-        DAV_USER: ${{ secrets.WEBDAV_USER }}
-        DAV_PASS: ${{ secrets.WEBDAV_PASS }}
-      run: |
-        # 带中文注释的传输脚本
-        echo "=== 开始文件传输 ==="
-        
-        # 生成文件列表
-        file_list=$(find . -path "$SOURCE_DIR")
-        total_files=$(echo "$file_list" | wc -l)
-        
-        # 循环传输
-        counter=0
-        for file in $file_list; do
-          ((counter++))
-          filename=$(basename "$file")
-          echo "📤 正在上传 ($counter/$total_files): $filename"
-          
-          # 使用curl显示进度条
-          curl --user "$DAV_USER:$DAV_PASS" \
-               --upload-file "$file" \
-               --progress-bar \
-               "$WEBDAV_URL/$filename"
-        done
-        
-        echo "✅ 所有文件传输完成"
+- name: 🚚 安全验证传输
+  env:
+    DAV_USER: ${{ secrets.WEBDAV_USER }}
+    DAV_PASS: ${{ secrets.WEBDAV_PASS }}
+  run: |
+    # 安全显示凭据信息
+    echo "=== 凭据验证 ==="
+    echo "用户名: ${DAV_USER:0:2}****${DAV_USER: -2}"
+    echo "密码: ${DAV_PASS:0:2}****${DAV_PASS: -2}"
+    
+    # 创建测试文件
+    TEST_FILE="github_action_test_$(date +%s).txt"
+    echo "This is a test file from GitHub Actions" > $TEST_FILE
+    
+    # 带诊断的测试上传
+    if curl -v -u "$DAV_USER:$DAV_PASS" \
+         -T ./$TEST_FILE \
+         --fail \
+         "$WEBDAV_URL/$TEST_FILE" 2> curl.log; then
+    
+      echo "✅ 凭据验证通过"
+      curl -u "$DAV_USER:$DAV_PASS" -X DELETE "$WEBDAV_URL/$TEST_FILE"
+      exit 0
+    else
+      echo "❌ 凭据验证失败"
+      
+      # 解析curl日志
+      if grep -q "401 Unauthorized" curl.log; then
+        echo "错误原因: 用户名或密码错误"
+      elif grep -q "404 Not Found" curl.log; then
+        echo "错误原因: 目标路径不存在"
+      elif grep -q "timed out" curl.log; then
+        echo "错误原因: 连接超时，请检查网络"
+      else
+        echo "未知错误，查看调试日志："
+        cat curl.log | grep -i 'error\|fail'
+      fi
+      
+      exit 1
+    fi
