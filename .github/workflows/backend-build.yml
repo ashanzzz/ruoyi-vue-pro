@@ -1,64 +1,65 @@
-name: 🚀 安全分卷发布系统
+name: ZIP分卷部署系统
 
 on:
   push:
     branches: [ "master" ]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
-  release:
+  build-and-deploy:
     runs-on: ubuntu-latest
 
     steps:
-    # --------------- 1. 检出代码 ---------------
-    - name: 🔍 检出代码
+    # --------------------- 基础配置 ---------------------
+    - name: 检出代码
       uses: actions/checkout@v4
       with:
         fetch-depth: 0
+        persist-credentials: true
 
-    # --------------- 2. 构建环境 ---------------
-    - name: 🛠️ 设置Java环境
+    - name: 设置JDK 17
       uses: actions/setup-java@v4
       with:
         java-version: '17'
         distribution: 'temurin'
+        cache: 'maven'
 
-    # --------------- 3. 编译并清理 ---------------
-    - name: 📦 编译项目
-      run: |
-        mvn clean package -Dmaven.test.skip=true
-        
-        # 删除所有非必要文件
-        find . -type f -name '*.original' -delete
-        find . -type d -name 'maven-*' -exec rm -rf {} +
+    # --------------------- 构建阶段 ---------------------
+    - name: 编译项目
+      run: mvn clean package -Dmaven.test.skip=true -T 1C
 
-    # --------------- 4. 流式分卷压缩 ---------------
-    - name: 🗜️ 实时分卷处理
+    # --------------------- ZIP分卷处理 ---------------------
+    - name: 安装ZIP工具
+      run: sudo apt-get install -y zip
+
+    - name: 创建ZIP分卷
       run: |
-        mkdir -p release
+        mkdir -p zip_split
+        # 先打包成单个ZIP
+        find . -name "*.jar" -exec zip -r -0 zip_split/output.zip {} +
         
-        # 流式分卷（不生成完整tar包）
-        find . -name "*.jar" -print0 | \
-          tar -czvf - --null -T - | \
-          split -d -b 90M - "release/jars.part."
+        # 分割为80MB分卷
+        split -d -b 80M zip_split/output.zip zip_split/output.zip.
         
         # 生成校验文件
-        cd release
-        md5sum *.part.* > checksum.md5
-
-    # --------------- 5. 发布到Releases ---------------
-    - name: 🚀 推送分卷到分支
+        md5sum zip_split/* > zip_split/checksum.md5
+    # --------------------- 部署阶段 ---------------------
+    - name: 推送ZIP分卷
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
-        # 创建或重置分支
-        git checkout --orphan split-files
+        git config --global user.name "GitHub Actions"
+        git config --global user.email "actions@github.com"
+        
+        git checkout --orphan zip-release
         git reset --hard
         
-        # 移动分卷文件
-        mv release/* .
+        # 添加分割文件
+        cp -r zip_split/* .
+        git add output.zip.* checksum.md5
         
-        # 提交并强制推送
-        git add .
-        git commit -m "Auto: 分卷文件 $(date '+%Y%m%d%H%M')"
-        git push origin split-files --force
+        git commit -m "chore: ZIP分卷包 $(date '+%Y%m%d%H%M')"
+        git push origin zip-release --force
