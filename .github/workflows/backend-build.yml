@@ -1,35 +1,25 @@
-name: 后端构建与部署
+name: 分卷部署系统
 
 on:
   push:
     branches: [ "master" ]
   workflow_dispatch:
 
-# --------------------- 修正后的权限配置 ---------------------
 permissions:
-  contents: write  # 正确权限作用域
-  packages: write  # 如需发布到GitHub Packages
+  contents: write
 
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
 
     steps:
-    # --------------------- Git LFS 前置配置 ---------------------
-    - name: 安装Git LFS
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y git-lfs
-        git lfs install --skip-repo
-
-    - name: 检出代码（含LFS）
+    # --------------------- 基础配置 ---------------------
+    - name: 检出代码
       uses: actions/checkout@v4
       with:
-        lfs: true  # 此处才是正确启用LFS的位置
         fetch-depth: 0
         persist-credentials: true
 
-    # --------------------- 构建阶段 ---------------------
     - name: 设置JDK 17
       uses: actions/setup-java@v4
       with:
@@ -37,23 +27,27 @@ jobs:
         distribution: 'temurin'
         cache: 'maven'
 
-    - name: 优化构建配置
-      run: |
-        # 使用Maven shade插件排除测试类
-        mvn clean package -Dmaven.test.skip=true -T 1C -B \
-          -Dmaven.shade.excludeTests=true \
-          -Dmaven.javadoc.skip=true
+    # --------------------- 构建阶段 ---------------------
+    - name: 编译项目
+      run: mvn clean package -Dmaven.test.skip=true -T 1C
 
-    # --------------------- 产物分流处理 ---------------------
-    - name: 拆分部署文件
-      run: |
-        # 将主应用Jar单独分类
-        mkdir -p lfs-files
-        find . -name "yudao-server*.jar" -exec mv {} lfs-files \;
-        find . -name "*.jar" -exec mv {} . \;
+    # --------------------- 分卷压缩（核心步骤）---------------------
+    - name: 安装7-Zip
+      run: sudo apt-get install -y p7zip-full
 
-    # --------------------- LFS推送 ---------------------
-    - name: 推送至release分支
+    - name: 压缩为分卷包
+      run: |
+        # 创建临时目录
+        mkdir -p split_files
+        
+        # 查找所有Jar文件进行分卷压缩
+        find . -name "*.jar" -exec 7z a -v80m -t7z -mmt=on split_files/output.7z {} +
+        
+        # 生成校验文件
+        md5sum split_files/*.7z* > split_files/checksum.md5
+
+    # --------------------- 分卷部署 ---------------------
+    - name: 推送分卷包到分支
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
@@ -61,17 +55,23 @@ jobs:
         git config --global user.email "actions@github.com"
         
         # 创建专用分支
-        git checkout --orphan release
+        git checkout --orphan split-release
         git reset --hard
         
-        # 处理LFS文件
-        git lfs install
-        git lfs track "lfs-files/**"
-        mv lfs-files/* . && rm -rf lfs-files
+        # 添加分卷文件
+        cp -r split_files/* .
+        git add *.7z* checksum.md5
         
-        # 精简提交内容
-        git add -A
-        git commit -m "chore: 发布v$(date '+%Y%m%d%H%M') (LFS)"
-        
-        # 强制推送（需仓库设置允许LFS强制推送）
-        git push origin release --force --follow-tags
+        # 提交并推送
+        git commit -m "chore: 分卷包 v$(date '+%Y%m%d%H%M')"
+        git push origin split-release --force
+
+    # --------------------- 产物备份 ---------------------
+    - name: 上传分卷包备份
+      uses: actions/upload-artifact@v4
+      with:
+        name: split-packages
+        path: |
+          split_files/*.7z*
+          split_files/checksum.md5
+        retention-days: 7
