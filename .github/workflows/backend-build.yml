@@ -1,78 +1,57 @@
-name: 直传WebDAV部署
+- name: 传输文件到WebDAV
+  env:
+    DAV_USER: ${{ secrets.WEBDAV_USER }}
+    DAV_PASS: ${{ secrets.WEBDAV_PASS }}
+  run: |
+    # 敏感信息掩码处理
+    masked_user="${DAV_USER:0:2}****${DAV_USER: -2}"
+    masked_pass="${DAV_PASS:0:2}****${DAV_PASS: -2}"
+    
+    # 生成文件列表
+    file_list=$(find . -path "$SOURCE_DIR")
+    total_files=$(echo "$file_list" | wc -l)
+    
+    # 循环传输
+    i=0
+    for file in $file_list; do
+      ((i++))
+      echo "正在上传 ($i/$total_files): ${file##*/}"
+      
+      # 带诊断的传输命令
+      upload_output=$(pv -n -b -r -a "$file" | \
+        curl -u "$DAV_USER:$DAV_PASS" \
+             -T - \
+             --silent --show-error \
+             --write-out "%{http_code}" \
+             "$WEBDAV_URL/${file##*/}" \
+             2>&1) || exit_code=$?
+      
+      # 解析响应状态码
+      http_code=$(echo "$upload_output" | tail -n1)
+      response_body=$(echo "$upload_output" | sed '$d')
 
-on:
-  push:
-    branches: [ "master" ]
-  workflow_dispatch:
-
-env:
-  WEBDAV_URL: "https://alist.335356119.xyz/dav/群晖/home/download"
-  SOURCE_DIR: "**/target/*.jar"  # 匹配所有Jar文件
-
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
-
-    steps:
-    # --------------- 1. 代码检出 ---------------
-    - name: 检出代码
-      uses: actions/checkout@v4
-
-    # --------------- 2. 构建项目 ---------------
-    - name: 设置JDK环境
-      uses: actions/setup-java@v4
-      with:
-        java-version: '17'
-        distribution: 'temurin'
-        cache: 'maven'
-
-    - name: 编译打包
-      run: mvn clean package -Dmaven.test.skip=true
-
-    # --------------- 3. 文件传输 (带进度条) ---------------
-    - name: 安装传输工具
-      run: sudo apt-get install -y pv  # 进度查看工具
-
-    - name: 传输文件到WebDAV
-      env:
-        DAV_USER: ${{ secrets.WEBDAV_USER }}
-        DAV_PASS: ${{ secrets.WEBDAV_PASS }}
-      run: |
-        # 生成文件列表
-        file_list=$(find . -path "$SOURCE_DIR")
-        total_files=$(echo "$file_list" | wc -l)
+      # 错误诊断
+      if [ $? -ne 0 ] || [ $http_code -ge 400 ]; then
+        echo "❌ 上传失败！诊断信息："
+        echo "--------------------------"
+        echo "文件: ${file##*/}"
+        echo "用户: $masked_user"
+        echo "密码: $masked_pass"
+        echo "HTTP状态码: $http_code"
+        echo "响应内容: $response_body"
         
-        # 循环传输每个文件
-        i=0
-        for file in $file_list; do
-          ((i++))
-          echo "正在上传 ($i/$total_files): ${file##*/}"
-          
-          # 使用pv显示进度和速度
-          pv -n -b -r -a "$file" | \
-          curl -u "$DAV_USER:$DAV_PASS" \
-               -T - \
-               --progress-bar \
-               "$WEBDAV_URL/${file##*/}" \
-               | tee /dev/stderr
-        done
-
-    # --------------- 4. 结果验证 ---------------
-    - name: 验证传输结果
-      env:
-        DAV_USER: ${{ secrets.WEBDAV_USER }}
-        DAV_PASS: ${{ secrets.WEBDAV_PASS }}
-      run: |
-        # 获取本地文件列表
-        local_files=$(find . -path "$SOURCE_DIR" -exec basename {} \; | sort)
+        # 常见错误映射
+        case $http_code in
+          401) echo "错误原因: WebDAV认证失败，请检查用户名密码" ;;
+          403) echo "错误原因: 权限不足，确认路径/群晖/home/download存在且有写入权限" ;;
+          404) echo "错误原因: 目标路径不存在，请检查URL中的目录结构" ;;
+          413) echo "错误原因: 文件超过服务器大小限制" ;;
+          500|502|503|504) echo "错误原因: 服务器内部错误，请检查Alist服务状态" ;;
+          *) echo "错误原因: 网络问题或未知错误，请检查网络连接" ;;
+        esac
         
-        # 获取远程文件列表
-        remote_files=$(curl -u "$DAV_USER:$DAV_PASS" -s -X PROPFIND "$WEBDAV_URL" | 
-                       grep -oP '<d:displayname>\K.*?(?=</d:displayname>)' | 
-                       sort)
-        
-        # 对比差异
-        diff <(echo "$local_files") <(echo "$remote_files") || {
-          echo "错误：远程文件与本地不一致"
-          exit 1
-        }
+        exit 1
+      fi
+      
+      echo "✅ 上传成功"
+    done
