@@ -1,4 +1,4 @@
-name: WebDAV安全部署
+name: 直传WebDAV部署
 
 on:
   push:
@@ -6,60 +6,73 @@ on:
   workflow_dispatch:
 
 env:
-  WEBDAV_URL: https://alist.335356119.xyz/dav/
-  TARGET_PATH: /群晖/home/download
+  WEBDAV_URL: "https://alist.335356119.xyz/dav/群晖/home/download"
+  SOURCE_DIR: "**/target/*.jar"  # 匹配所有Jar文件
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
     steps:
-    # --------------- 基础构建 ---------------
+    # --------------- 1. 代码检出 ---------------
     - name: 检出代码
       uses: actions/checkout@v4
 
-    - name: 构建项目
+    # --------------- 2. 构建项目 ---------------
+    - name: 设置JDK环境
       uses: actions/setup-java@v4
       with:
         java-version: '17'
         distribution: 'temurin'
+        cache: 'maven'
+
+    - name: 编译打包
       run: mvn clean package -Dmaven.test.skip=true
 
-    # --------------- 安全分卷 ---------------
-    - name: 分卷处理
-      run: |
-        mkdir -p upload
-        find . -name "*.jar" -exec sh -c '
-          file="{}"
-          split -d -b 50M "$file" "upload/$(basename "$file").part."
-          md5sum "$file" > "upload/$(basename "$file").md5"
-        ' \;
+    # --------------- 3. 文件传输 (带进度条) ---------------
+    - name: 安装传输工具
+      run: sudo apt-get install -y pv  # 进度查看工具
 
-    # --------------- WebDAV认证 ---------------
-    - name: 配置WebDAV
+    - name: 传输文件到WebDAV
       env:
-        DAV_USER: ${{ secrets.WEBDAV_USER }}  # 在Secrets中设置 ashan
-        DAV_PASS: ${{ secrets.WEBDAV_PASS }}  # 在Secrets中设置 Woo@@@204317
+        DAV_USER: ${{ secrets.WEBDAV_USER }}
+        DAV_PASS: ${{ secrets.WEBDAV_PASS }}
       run: |
-        echo "machine alist.335356119.xyz
-        login $DAV_USER
-        password $DAV_PASS" > ~/.netrc
-        chmod 600 ~/.netrc
+        # 生成文件列表
+        file_list=$(find . -path "$SOURCE_DIR")
+        total_files=$(echo "$file_list" | wc -l)
+        
+        # 循环传输每个文件
+        i=0
+        for file in $file_list; do
+          ((i++))
+          echo "正在上传 ($i/$total_files): ${file##*/}"
+          
+          # 使用pv显示进度和速度
+          pv -n -b -r -a "$file" | \
+          curl -u "$DAV_USER:$DAV_PASS" \
+               -T - \
+               --progress-bar \
+               "$WEBDAV_URL/${file##*/}" \
+               | tee /dev/stderr
+        done
 
-    # --------------- 安全传输 ---------------
-    - name: 上传文件
+    # --------------- 4. 结果验证 ---------------
+    - name: 验证传输结果
+      env:
+        DAV_USER: ${{ secrets.WEBDAV_USER }}
+        DAV_PASS: ${{ secrets.WEBDAV_PASS }}
       run: |
-        # 使用curl递归上传
-        curl -v -n -X MKCOL "${WEBDAV_URL}${TARGET_PATH}" || true
-        find upload/ -type f -exec curl -n -T {} "${WEBDAV_URL}${TARGET_PATH}/{}" \;
-
-        # 生成访问清单
-        echo "上传时间: $(date)" > upload.log
-        find upload/ -type f >> upload.log
-        curl -n -T upload.log "${WEBDAV_URL}${TARGET_PATH}/"
-
-    # --------------- 后置清理 ---------------
-    - name: 安全清理
-      run: |
-        shred -zu ~/.netrc
-        rm -rf upload/
+        # 获取本地文件列表
+        local_files=$(find . -path "$SOURCE_DIR" -exec basename {} \; | sort)
+        
+        # 获取远程文件列表
+        remote_files=$(curl -u "$DAV_USER:$DAV_PASS" -s -X PROPFIND "$WEBDAV_URL" | 
+                       grep -oP '<d:displayname>\K.*?(?=</d:displayname>)' | 
+                       sort)
+        
+        # 对比差异
+        diff <(echo "$local_files") <(echo "$remote_files") || {
+          echo "错误：远程文件与本地不一致"
+          exit 1
+        }
