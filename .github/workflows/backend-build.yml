@@ -1,4 +1,4 @@
-name: ZIP分卷部署系统
+name: ZIP分卷部署+产物推送
 
 on:
   push:
@@ -9,58 +9,83 @@ permissions:
   contents: write
 
 jobs:
-  build-and-deploy:
+  zip-split-deploy:
     runs-on: ubuntu-latest
 
     steps:
-    # --------------------- 基础配置 ---------------------
+    # --------------- 基础配置 ---------------
     - name: 检出代码
       uses: actions/checkout@v4
       with:
         fetch-depth: 0
         persist-credentials: true
 
-    - name: 设置JDK 17
+    - name: 设置JDK环境
       uses: actions/setup-java@v4
       with:
         java-version: '17'
         distribution: 'temurin'
         cache: 'maven'
+    
+    # --------------- 缓存优化 ---------------
+    - name: 缓存Maven依赖
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.m2/repository
+          **/target/
+        key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+        restore-keys: |
+          ${{ runner.os }}-maven-
 
-    # --------------------- 构建阶段 ---------------------
+    # --------------- 构建阶段 ---------------
     - name: 编译项目
       run: mvn clean package -Dmaven.test.skip=true -T 1C
 
-    # --------------------- ZIP分卷处理 ---------------------
-    - name: 安装ZIP工具
+    # --------------- 分卷处理 ---------------
+    - name: 安装压缩工具
       run: sudo apt-get install -y zip
 
-    - name: 创建ZIP分卷
+    - name: 生成分卷ZIP
       run: |
-        mkdir -p zip_split
-        # 先打包成单个ZIP
-        find . -name "*.jar" -exec zip -r -0 zip_split/output.zip {} +
+        mkdir -p artifacts
+        # 打包所有Jar文件
+        find . -name "*.jar" -exec zip -0 artifacts/output.zip {} +
         
         # 分割为80MB分卷
-        split -d -b 80M zip_split/output.zip zip_split/output.zip.
+        split -d -b 80M artifacts/output.zip artifacts/output_part-
         
         # 生成校验文件
-        md5sum zip_split/* > zip_split/checksum.md5
+        cd artifacts
+        md5sum output.zip > checksum.md5
+        md5sum output_part-* >> checksum.md5
 
-    # --------------------- 部署阶段 ---------------------
-    - name: 推送ZIP分卷
+    # --------------- 产物推送 ---------------
+    - name: 上传分卷Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: split-zip-packages
+        path: |
+          artifacts/output_part-*
+          artifacts/checksum.md5
+        retention-days: 7
+        if-no-files-found: error
+
+    # --------------- 分支推送 ---------------
+    - name: 推送分卷到分支
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
-        git config --global user.name "GitHub Actions"
-        git config --global user.email "actions@github.com"
+        git config --global user.name "ArtifactBot"
+        git config --global user.email "bot@example.com"
         
-        git checkout --orphan zip-release
+        git checkout --orphan temp-split
         git reset --hard
         
-        # 添加分割文件
-        cp -r zip_split/* .
-        git add output.zip.* checksum.md5
+        # 移动文件并提交
+        mv artifacts/* .
+        git add .
+        git commit -m "Auto: Split ZIP $(date '+%m%d%H%M')"
         
-        git commit -m "chore: ZIP分卷包 $(date '+%Y%m%d%H%M')"
-        git push origin zip-release --force
+        # 强制推送至split-zip分支
+        git push origin temp-split:split-zip --force
