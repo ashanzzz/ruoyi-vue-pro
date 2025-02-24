@@ -2,17 +2,19 @@ name: 🚀 安全分卷发布系统
 
 on:
   push:
-    tags:
-      - 'v*'  # 通过标签触发发布
+    branches: [ "master" ]
+  workflow_dispatch:
 
 jobs:
-  build-and-release:
+  release:
     runs-on: ubuntu-latest
 
     steps:
     # --------------- 1. 检出代码 ---------------
     - name: 🔍 检出代码
       uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
 
     # --------------- 2. 构建环境 ---------------
     - name: 🛠️ 设置Java环境
@@ -20,42 +22,38 @@ jobs:
       with:
         java-version: '17'
         distribution: 'temurin'
-        cache: 'maven'
 
-    # --------------- 3. 编译项目 ---------------
-    - name: 📦 编译并清理
+    # --------------- 3. 编译并清理 ---------------
+    - name: 📦 编译项目
       run: |
-        # 编译项目
         mvn clean package -Dmaven.test.skip=true
         
-        # 删除所有非目标Jar文件
+        # 删除所有非必要文件
         find . -type f -name '*.original' -delete
-        find . -type d -name 'maven-archiver' -exec rm -rf {} +
-        find . -type d -name 'maven-status' -exec rm -rf {} +
+        find . -type d -name 'maven-*' -exec rm -rf {} +
 
     # --------------- 4. 流式分卷压缩 ---------------
     - name: 🗜️ 实时分卷处理
       run: |
-        # 创建临时目录
-        mkdir -p release_parts
+        mkdir -p release
         
-        # 流式处理（不生成完整tar包）
+        # 流式分卷（不生成完整tar包）
         find . -name "*.jar" -print0 | \
           tar -czvf - --null -T - | \
-          split -d -b 90M - "release_parts/jars.part."
+          split -d -b 90M - "release/jars.part."
         
         # 生成校验文件
-        cd release_parts
+        cd release
         md5sum *.part.* > checksum.md5
 
     # --------------- 5. 发布到Releases ---------------
     - name: 🚀 创建Release
-      id: create_release
       uses: softprops/action-gh-release@v1
       with:
-        tag_name: ${{ github.ref_name }}
+        tag_name: "v$(date +%Y%m%d%H%M)"
         files: |
-          release_parts/jars.part.*
-          release_parts/checksum.md5
+          release/*.part.*
+          release/checksum.md5
+        draft: false
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
