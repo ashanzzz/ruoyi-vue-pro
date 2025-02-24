@@ -1,44 +1,66 @@
-name: 🚀 编译并推送LFS
+name: 🗜️ JAR分卷部署系统
 
 on:
   push:
     branches: [ "master" ]
   workflow_dispatch:
 
-permissions:
-  contents: write
+env:
+  BRANCH_NAME: "split-release"  # 分卷存储分支
+  SPLIT_SIZE: "90M"            # 分卷大小
+  TAR_NAME: "jars.tar.gz"       # 压缩包名称
 
 jobs:
-  build-and-push:
+  split-and-push:
     runs-on: ubuntu-latest
 
     steps:
-    - name: 🔍 检出代码 (含LFS)
+    # --------------- 1. 代码检出 ---------------
+    - name: 🔍 检出代码
       uses: actions/checkout@v4
       with:
-        lfs: true  # 必须启用LFS
+        fetch-depth: 0
 
-    - name: 🛠️ 设置JDK环境
+    # --------------- 2. 设置环境 ---------------
+    - name: 🛠️ 设置Java环境
       uses: actions/setup-java@v4
       with:
         java-version: '17'
         distribution: 'temurin'
-        cache: 'maven'
 
-    - name: 📦 编译项目
+    # --------------- 3. 编译项目 ---------------
+    - name: 📦 Maven编译
       run: mvn clean package -Dmaven.test.skip=true
 
-    - name: 🔒 添加LFS文件
+    # --------------- 4. 分卷压缩 ---------------
+    - name: 🗜️ 压缩分卷
       run: |
-        git lfs install --local
-        git add .gitattributes
-        git add **/target/*.jar
+        # 创建压缩包
+        tar -zcvf $TAR_NAME **/target/*.jar
+        
+        # 分割为90MB分卷
+        split -d -b $SPLIT_SIZE $TAR_NAME "$TAR_NAME.part."
+        
+        # 生成校验文件
+        md5sum $TAR_NAME.part.* > checksum.md5
 
-    - name: 🚢 提交并推送
+    # --------------- 5. 推送到分支 ---------------
+    - name: 🚀 推送分卷
       env:
-        GIT_AUTHOR_NAME: GitHub Actions
-        GIT_AUTHOR_EMAIL: actions@github.com
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
-        git commit -m "chore: 自动提交编译产物 (LFS)" || echo "无新文件"
-        git lfs push origin HEAD
-        git push origin HEAD
+        # 配置Git身份
+        git config --global user.name "GitHub Actions"
+        git config --global user.email "actions@github.com"
+
+        # 创建或重置分支
+        git checkout --orphan $BRANCH_NAME
+        git reset --hard
+        
+        # 添加分卷文件
+        mv $TAR_NAME.part.* checksum.md5 .
+        git add .
+        
+        # 提交并强制推送
+        git commit -m "Release: JAR分卷包 $(date '+%Y%m%d%H%M')"
+        git push origin $BRANCH_NAME --force
