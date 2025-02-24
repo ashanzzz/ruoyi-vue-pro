@@ -1,72 +1,61 @@
-name: 🗜️ JAR分卷部署系统（修复版）
+name: 🚀 安全分卷发布系统
 
 on:
   push:
-    branches: [ "master" ]
-  workflow_dispatch:
-
-env:
-  BRANCH_NAME: "split-release"
-  SPLIT_SIZE: "90M"
-  TAR_NAME: "jars.tar.gz"
-  WORK_DIR: "split_files"  # 新增工作目录
+    tags:
+      - 'v*'  # 通过标签触发发布
 
 jobs:
-  split-and-push:
+  build-and-release:
     runs-on: ubuntu-latest
 
     steps:
-    # --------------- 1. 代码检出 ---------------
+    # --------------- 1. 检出代码 ---------------
     - name: 🔍 检出代码
       uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
 
-    # --------------- 2. 设置环境 ---------------
+    # --------------- 2. 构建环境 ---------------
     - name: 🛠️ 设置Java环境
       uses: actions/setup-java@v4
       with:
         java-version: '17'
         distribution: 'temurin'
+        cache: 'maven'
 
     # --------------- 3. 编译项目 ---------------
-    - name: 📦 Maven编译
-      run: mvn clean package -Dmaven.test.skip=true
-
-    # --------------- 4. 分卷压缩（路径修复）---------------
-    - name: 🗜️ 压缩分卷
+    - name: 📦 编译并清理
       run: |
-        # 创建独立工作目录
-        mkdir -p $WORK_DIR
+        # 编译项目
+        mvn clean package -Dmaven.test.skip=true
         
-        # 压缩到指定目录
-        tar -zcvf $WORK_DIR/$TAR_NAME **/target/*.jar
+        # 删除所有非目标Jar文件
+        find . -type f -name '*.original' -delete
+        find . -type d -name 'maven-archiver' -exec rm -rf {} +
+        find . -type d -name 'maven-status' -exec rm -rf {} +
+
+    # --------------- 4. 流式分卷压缩 ---------------
+    - name: 🗜️ 实时分卷处理
+      run: |
+        # 创建临时目录
+        mkdir -p release_parts
         
-        # 在指定目录分割文件
-        cd $WORK_DIR
-        split -d -b $SPLIT_SIZE $TAR_NAME "$TAR_NAME.part."
+        # 流式处理（不生成完整tar包）
+        find . -name "*.jar" -print0 | \
+          tar -czvf - --null -T - | \
+          split -d -b 90M - "release_parts/jars.part."
         
         # 生成校验文件
-        md5sum $TAR_NAME.part.* > checksum.md5
+        cd release_parts
+        md5sum *.part.* > checksum.md5
 
-    # --------------- 5. 推送到分支（路径修复）---------------
-    - name: 🚀 推送分卷
+    # --------------- 5. 发布到Releases ---------------
+    - name: 🚀 创建Release
+      id: create_release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ github.ref_name }}
+        files: |
+          release_parts/jars.part.*
+          release_parts/checksum.md5
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: |
-        # 配置Git身份
-        git config --global user.name "GitHub Actions"
-        git config --global user.email "actions@github.com"
-
-        # 创建或重置分支
-        git checkout --orphan $BRANCH_NAME
-        git reset --hard
-        
-        # 移动文件到根目录
-        mv $WORK_DIR/* .
-        rmdir $WORK_DIR
-        
-        # 添加并提交文件
-        git add .
-        git commit -m "Release: JAR分卷包 $(date '+%Y%m%d%H%M')"
-        git push origin $BRANCH_NAME --force
