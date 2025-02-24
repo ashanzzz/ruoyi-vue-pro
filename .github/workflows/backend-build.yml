@@ -1,4 +1,4 @@
-name: ZIP分卷部署+产物推送
+name: JAR直传部署系统
 
 on:
   push:
@@ -7,9 +7,10 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 jobs:
-  zip-split-deploy:
+  jar-deploy:
     runs-on: ubuntu-latest
 
     steps:
@@ -26,66 +27,51 @@ jobs:
         java-version: '17'
         distribution: 'temurin'
         cache: 'maven'
-    
-    # --------------- 缓存优化 ---------------
-    - name: 缓存Maven依赖
-      uses: actions/cache@v3
-      with:
-        path: |
-          ~/.m2/repository
-          **/target/
-        key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
-        restore-keys: |
-          ${{ runner.os }}-maven-
 
     # --------------- 构建阶段 ---------------
     - name: 编译项目
       run: mvn clean package -Dmaven.test.skip=true -T 1C
 
-    # --------------- 分卷处理 ---------------
-    - name: 安装压缩工具
-      run: sudo apt-get install -y zip
-
-    - name: 生成分卷ZIP
+    # --------------- JAR分卷处理 ---------------
+    - name: 分卷大文件
       run: |
-        mkdir -p artifacts
-        # 打包所有Jar文件
-        find . -name "*.jar" -exec zip -0 artifacts/output.zip {} +
-        
-        # 分割为80MB分卷
-        split -d -b 80M artifacts/output.zip artifacts/output_part-
-        
-        # 生成校验文件
-        cd artifacts
-        md5sum output.zip > checksum.md5
-        md5sum output_part-* >> checksum.md5
+        mkdir -p jar_parts
+        # 查找并分割所有Jar
+        find . -name "*.jar" -exec sh -c '
+          file="{}"
+          filename=$(basename "$file")
+          split -d -b 80M "$file" "jar_parts/${filename}.part."
+          md5sum "$file" > "jar_parts/${filename}.md5"
+        ' \;
 
     # --------------- 产物推送 ---------------
-    - name: 上传分卷Artifacts
+    - name: 上传JAR Artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: split-zip-packages
+        name: raw-jar-packages
         path: |
-          artifacts/output_part-*
-          artifacts/checksum.md5
+          jar_parts/*.part.*
+          jar_parts/*.md5
         retention-days: 7
         if-no-files-found: error
 
     # --------------- 分支推送 ---------------
-    - name: 推送分卷到分支
+    - name: 推送至JAR分支
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
-        git config --global user.name "ArtifactBot"
-        git config --global user.email "bot@example.com"
+        git config --global user.name "JarBot"
+        git config --global user.email "jar@example.com"
         
-        git checkout --orphan temp-split
+        # 创建临时分支
+        git checkout --orphan temp-jar
         git reset --hard
         
-        # 移动文件并提交
-        mv artifacts/* .
+        # 组织文件结构
+        mkdir -p jars
+        cp -r jar_parts/* .
         git add .
-        git commit -m "Auto: Split ZIP $(date '+%m%d%H%M')"
         
-        # 强制推送至split-zip分支
-        git push origin temp-split:split-zip --force
+        # 提交并推送
+        git commit -m "Auto: 原始JAR文件 $(date '+%m%d%H%M')"
+        git push origin temp-jar:raw-jars --force
