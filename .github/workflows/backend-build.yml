@@ -1,4 +1,4 @@
-name: 分卷部署系统
+name: ZIP分卷部署系统
 
 on:
   push:
@@ -31,47 +31,36 @@ jobs:
     - name: 编译项目
       run: mvn clean package -Dmaven.test.skip=true -T 1C
 
-    # --------------------- 分卷压缩（核心步骤）---------------------
-    - name: 安装7-Zip
-      run: sudo apt-get install -y p7zip-full
+    # --------------------- ZIP分卷处理 ---------------------
+    - name: 安装ZIP工具
+      run: sudo apt-get install -y zip
 
-    - name: 压缩为分卷包
+    - name: 创建ZIP分卷
       run: |
-        # 创建临时目录
-        mkdir -p split_files
+        mkdir -p zip_split
+        # 先打包成单个ZIP
+        find . -name "*.jar" -exec zip -r -0 zip_split/output.zip {} +
         
-        # 查找所有Jar文件进行分卷压缩
-        find . -name "*.jar" -exec 7z a -v80m -t7z -mmt=on split_files/output.7z {} +
+        # 分割为80MB分卷
+        split -d -b 80M zip_split/output.zip zip_split/output.zip.
         
         # 生成校验文件
-        md5sum split_files/*.7z* > split_files/checksum.md5
+        md5sum zip_split/* > zip_split/checksum.md5
 
-    # --------------------- 分卷部署 ---------------------
-    - name: 推送分卷包到分支
+    # --------------------- 部署阶段 ---------------------
+    - name: 推送ZIP分卷
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         git config --global user.name "GitHub Actions"
         git config --global user.email "actions@github.com"
         
-        # 创建专用分支
-        git checkout --orphan split-release
+        git checkout --orphan zip-release
         git reset --hard
         
-        # 添加分卷文件
-        cp -r split_files/* .
-        git add *.7z* checksum.md5
+        # 添加分割文件
+        cp -r zip_split/* .
+        git add output.zip.* checksum.md5
         
-        # 提交并推送
-        git commit -m "chore: 分卷包 v$(date '+%Y%m%d%H%M')"
-        git push origin split-release --force
-
-    # --------------------- 产物备份 ---------------------
-    - name: 上传分卷包备份
-      uses: actions/upload-artifact@v4
-      with:
-        name: split-packages
-        path: |
-          split_files/*.7z*
-          split_files/checksum.md5
-        retention-days: 7
+        git commit -m "chore: ZIP分卷包 $(date '+%Y%m%d%H%M')"
+        git push origin zip-release --force
