@@ -5,22 +5,19 @@
     <parent>
         <artifactId>yudao-module-hrms</artifactId>
         <groupId>cn.iocoder.boot</groupId>
-        <version>${revision}</version> <!-- 修改 version 为 ${revision} -->
+        <version>${revision}</version>
     </parent>
     <modelVersion>4.0.0</modelVersion>
     <artifactId>yudao-module-hrms-api</artifactId>
-    <packaging>jar</packaging> <!-- 新增 packaging 为 jar -->
+    <packaging>jar</packaging>
 
-    <name>${project.artifactId}</name> <!-- 新增 name 为 ${project.artifactId} -->
-    <description>
-        hrms 模块 API，暴露给其它模块调用
-    </description>
+    <name>${project.artifactId}</name>
+    <description>HRMS API，提供外部接口</description>
 
-    <dependencies>  <!-- 新增 yudao-common 依赖 -->
+    <dependencies>
         <dependency>
             <groupId>cn.iocoder.boot</groupId>
             <artifactId>yudao-common</artifactId>
         </dependency>
     </dependencies>
-
 </project>
