@@ -31,8 +31,14 @@ jobs:
           WEBDAV_PASS: ${{ secrets.WEBDAV_PASS }}
         run: |
           FILE_NAME="yudao-server.jar"
-          TARGET_URL="https://alist.335356119.xyz/dav/群晖/home/download/yudao/${FILE_NAME}"
+          TARGET_DIR="https://alist.335356119.xyz/dav/群晖/home/download/yudao"
+          TARGET_URL="${TARGET_DIR}/${FILE_NAME}"
+          
+          echo "Creating directory on WebDAV (if not exists): ${TARGET_DIR}"
+          curl -X MKCOL -u "$WEBDAV_USER:$WEBDAV_PASS" "${TARGET_DIR}" || echo "Directory may already exist or could not be created"
+          
           echo "Deleting old file (if exists) from WebDAV: ${TARGET_URL}"
           curl -X DELETE --fail -u "$WEBDAV_USER:$WEBDAV_PASS" "${TARGET_URL}" || echo "No old file found or deletion failed"
+          
           echo "Uploading new file to WebDAV: ${TARGET_URL}"
           curl --progress-bar -T "yudao-server/target/${FILE_NAME}" -u "$WEBDAV_USER:$WEBDAV_PASS" "${TARGET_URL}"
