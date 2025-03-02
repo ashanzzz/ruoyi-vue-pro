@@ -1,7 +1,10 @@
-name: Java CI with Maven and WebDAV Upload (Manual Trigger)
+name: Java CI with Maven
 
 on:
-  workflow_dispatch:
+  push:
+    branches: [ master ]
+  # pull_request:
+  #   branches: [ master ]
 
 jobs:
   build:
@@ -9,46 +12,18 @@ jobs:
     strategy:
       matrix:
         java: [ '8', '11', '17' ]
-
     steps:
       - uses: actions/checkout@v2
-      
+
       - name: Set up JDK ${{ matrix.java }}
         uses: actions/setup-java@v2
         with:
           java-version: ${{ matrix.java }}
           distribution: 'temurin'
           cache: maven
-      
+
       - name: Build with Maven
         run: mvn -B package --file pom.xml -Dmaven.test.skip=true
 
-      - name: List target directory for debug
+      - name: List target directory content
         run: ls -al target
-
-      - name: Upload jar to Synology via WebDAV
-        env:
-          WEBDAV_USER: ${{ secrets.WEBDAV_USER }}
-          WEBDAV_PASS: ${{ secrets.WEBDAV_PASS }}
-        run: |
-          # 使用 find 命令查找构建生成的 jar 文件（只在 target 根目录查找）
-          JAR_FILE=$(find target -maxdepth 1 -type f -name '*.jar' | head -n 1)
-          if [ -z "$JAR_FILE" ]; then
-            echo "No jar file found in target directory. Here is the listing:"
-            ls -al target
-            exit 1
-          fi
-          echo "Found jar file: $JAR_FILE"
-          # 定义新文件名，包含当前构建使用的 Java 版本
-          NEW_NAME="myproject-java${{ matrix.java }}.jar"
-          mv "$JAR_FILE" "$NEW_NAME"
-          echo "Renamed jar file to: $NEW_NAME"
-          # 显示文件大小（单位：字节）
-          FILE_SIZE=$(stat -c%s "$NEW_NAME")
-          echo "File size: $FILE_SIZE bytes"
-          # 删除目标位置同名的旧文件（如果存在）
-          echo "Deleting old file if exists..."
-          curl -X DELETE --fail -u "$WEBDAV_USER:$WEBDAV_PASS" "https://alist.335356119.xyz/dav/群晖/home/download/jar/$NEW_NAME" || echo "No previous file found or deletion failed"
-          # 上传新文件，并显示上传进度条
-          echo "Uploading new file..."
-          curl --progress-bar -T "$NEW_NAME" -u "$WEBDAV_USER:$WEBDAV_PASS" "https://alist.335356119.xyz/dav/群晖/home/download/jar/$NEW_NAME"
