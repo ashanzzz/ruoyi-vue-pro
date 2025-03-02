@@ -25,5 +25,5 @@ jobs:
       - name: Build with Maven
         run: mvn -B package --file pom.xml -Dmaven.test.skip=true
 
-      - name: List target directory content
-        run: ls -al target
+      - name: List root directory content
+        run: ls -al
