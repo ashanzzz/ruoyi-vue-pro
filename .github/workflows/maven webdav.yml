@@ -1,4 +1,4 @@
-name: Build and Upload Artifact (Manual Trigger)
+name: Build and Upload via WebDAV (Manual Trigger)
 
 on:
   workflow_dispatch:
@@ -37,8 +37,16 @@ jobs:
             exit 1
           fi
 
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v3
-        with:
-          name: yudao-server-jdk${{ matrix.java }}
-          path: yudao-server/target/yudao-server-jdk${{ matrix.java }}.jar
+      - name: Upload jar to WebDAV
+        working-directory: yudao-server/target
+        env:
+          WEBDAV_USER: ${{ secrets.WEBDAV_USER }}
+          WEBDAV_PASS: ${{ secrets.WEBDAV_PASS }}
+        run: |
+          NEW_NAME="yudao-server-jdk${{ matrix.java }}.jar"
+          # 删除目标目录中同名的旧文件（若存在）
+          echo "Deleting old file (if exists) on WebDAV..."
+          curl -X DELETE --fail -u "$WEBDAV_USER:$WEBDAV_PASS" "https://alist.335356119.xyz/dav/群晖/home/download/jar/${NEW_NAME}" || echo "No previous file found or deletion failed"
+          # 上传新文件，并显示上传进度
+          echo "Uploading ${NEW_NAME} to WebDAV..."
+          curl --progress-bar -T "${NEW_NAME}" -u "$WEBDAV_USER:$WEBDAV_PASS" "https://alist.335356119.xyz/dav/群晖/home/download/jar/${NEW_NAME}"
