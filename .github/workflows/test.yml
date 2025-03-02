@@ -1,0 +1,18 @@
+name: Upload Test File via WebDAV
+
+on:
+  workflow_dispatch:
+
+jobs:
+  upload:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create empty test file
+        run: echo -n "" > test.txt
+
+      - name: Upload test file via WebDAV
+        env:
+          WEBDAV_USER: ${{ secrets.WEBDAV_USER }}
+          WEBDAV_PASS: ${{ secrets.WEBDAV_PASS }}
+        run: |
+          curl -X PUT -u "$WEBDAV_USER:$WEBDAV_PASS" -d "" "https://alist.335356119.xyz/dav/群晖/home/download/test.txt"
